@@ -1,16 +1,18 @@
 import { getBearerToken, validateJWT } from "../auth";
 import { respondWithJSON } from "./json";
-import { getVideo } from "../db/videos";
+import { getVideo, updateVideo } from "../db/videos";
 import type { ApiConfig } from "../config";
 import type { BunRequest } from "bun";
-import { BadRequestError, NotFoundError } from "./errors";
+import path from "node:path";
+import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
 
 type Thumbnail = {
   data: ArrayBuffer;
   mediaType: string;
 };
 
-const videoThumbnails: Map<string, Thumbnail> = new Map();
+// const videoThumbnails: Map<string, Thumbnail> = new Map();
+const MAX_UPLOAD_SIZE = 10 << 20; // 10 MB
 
 export async function handlerGetThumbnail(cfg: ApiConfig, req: BunRequest) {
   const { videoId } = req.params as { videoId?: string };
@@ -22,15 +24,10 @@ export async function handlerGetThumbnail(cfg: ApiConfig, req: BunRequest) {
   if (!video) {
     throw new NotFoundError("Couldn't find video");
   }
-
-  const thumbnail = videoThumbnails.get(videoId);
-  if (!thumbnail) {
-    throw new NotFoundError("Thumbnail not found");
-  }
-
-  return new Response(thumbnail.data, {
+  // const type = getMediaTypeFromBase64(video.thumbnailURL!);
+  return new Response(video.thumbnailURL, {
     headers: {
-      "Content-Type": thumbnail.mediaType,
+      "Content-Type": "image/jpeg",
       "Cache-Control": "no-store",
     },
   });
@@ -49,5 +46,37 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
 
   // TODO: implement the upload here
 
-  return respondWithJSON(200, null);
+  const formData = await req.formData();
+  const image = formData.get("thumbnail");
+  if (!(image instanceof File)) {
+    throw new BadRequestError("Invalid thumbnail file");
+  }
+  if (image.size > MAX_UPLOAD_SIZE) {
+    throw new BadRequestError("Thumbnail file is too large");
+  }
+  const type = image.type;
+  if (["image/png", "image/jpeg"].includes(type) === false) {
+    throw new BadRequestError("Invalid thumbnail file type");
+  }
+  const imageData = await image.arrayBuffer();
+  const video = getVideo(cfg.db, videoId);
+  if (!video) {
+    throw new NotFoundError("Couldn't find video");
+  }
+  if (video.userID !== userID) {
+    throw new UserForbiddenError(
+      "You do not have permission to upload thumbnail for this video",
+    );
+  }
+  const extension = getFileExtensionFromMediaType(type);
+  const filePath = path.join(cfg.assetsRoot, `${videoId}.${extension}`);
+  await Bun.write(filePath, imageData);
+  video.thumbnailURL = `http://localhost:${cfg.port}/${filePath}`;
+  updateVideo(cfg.db, video);
+  return respondWithJSON(200, video);
+}
+
+function getFileExtensionFromMediaType(mediaType: string): string {
+  const parts = mediaType.split("/");
+  return parts.length === 2 ? parts[1] : "bin";
 }
