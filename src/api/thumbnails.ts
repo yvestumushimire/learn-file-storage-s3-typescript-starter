@@ -3,6 +3,7 @@ import { respondWithJSON } from "./json";
 import { getVideo, updateVideo } from "../db/videos";
 import type { ApiConfig } from "../config";
 import type { BunRequest } from "bun";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
 
@@ -69,7 +70,8 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
     );
   }
   const extension = getFileExtensionFromMediaType(type);
-  const filePath = path.join(cfg.assetsRoot, `${videoId}.${extension}`);
+  const fileName = randomBytes(32).toString("base64");
+  const filePath = path.join(cfg.assetsRoot, `${fileName}.${extension}`);
   await Bun.write(filePath, imageData);
   video.thumbnailURL = `http://localhost:${cfg.port}/${filePath}`;
   updateVideo(cfg.db, video);
