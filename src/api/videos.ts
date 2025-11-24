@@ -12,6 +12,7 @@ import {
   getVideos,
   updateVideo,
 } from "../db/videos";
+import type { Video } from "../db/videos";
 import { UserForbiddenError, BadRequestError } from "./errors";
 import { randomBytes } from "node:crypto";
 
@@ -50,10 +51,10 @@ export async function handlerUploadVideo(cfg: ApiConfig, req: BunRequest) {
   });
   await s3file.write(videoFile, { type: rawVideo.type });
   await videoFile.delete();
-  video.videoURL = `https://${cfg.s3Bucket}.s3.${cfg.s3Region}.amazonaws.com/${awsfileName}`;
+  video.videoURL = awsfileName;
 
   updateVideo(cfg.db, video);
-  return respondWithJSON(200, video);
+  return respondWithJSON(200, dbVideoToSignedVideo(cfg, video));
 }
 
 function getFileExtensionFromMediaType(mediaType: string): string {
@@ -132,4 +133,20 @@ async function processVideoForFastStart(inputFilePath: string) {
     throw new Error(`ffmpeg process failed with exit code ${exitCode}`);
   }
   return outputFilePath;
+}
+
+function generatePresignedURL(cfg: ApiConfig, key: string, expireTime: number) {
+  const presignedURL = cfg.s3Client.presign(key, {
+    bucket: cfg.s3Bucket,
+    expiresIn: expireTime,
+  });
+  return presignedURL;
+}
+
+export function dbVideoToSignedVideo(cfg: ApiConfig, video: Video) {
+  if (!video.videoURL) {
+    return video;
+  }
+  video.videoURL = generatePresignedURL(cfg, video.videoURL, 3600);
+  return video;
 }
